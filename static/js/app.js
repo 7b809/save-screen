@@ -11,13 +11,55 @@ let sessionId = null;
 let partIndex = 1;
 let recordedChunks = []; // Accumulates all chunks so every payload is a valid WebM file
 
+// Configuration loaded dynamically from backend
+let debugFlag = false;
+let maxBatchSizeMB = 50; // Default limit in MB
+
+// Custom Logger Wrapper
+function log(message, ...args) {
+  if (debugFlag) {
+    console.log(message, ...args);
+  }
+}
+
+function logInfo(message, ...args) {
+  if (debugFlag) {
+    console.info(message, ...args);
+  }
+}
+
+function logWarn(message, ...args) {
+  if (debugFlag) {
+    console.warn(message, ...args);
+  }
+}
+
+// Fetch backend configuration on startup
+async function loadBackendConfig() {
+  try {
+    const response = await fetch("/api/config");
+    if (response.ok) {
+      const data = await response.json();
+      debugFlag = Boolean(data.debug_flag);
+      maxBatchSizeMB = Number(data.max_batch_size_mb) || 50;
+
+      log(`🔧 Config loaded -> Debug: ${debugFlag}, Max Batch Size: ${maxBatchSizeMB} MB`);
+    }
+  } catch (error) {
+    console.error("❌ Failed to load backend configuration:", error);
+  }
+}
+
+// Initialize config on script load
+loadBackendConfig();
+
 function updateStatus(message, type = "secondary") {
   statusBox.className = `alert alert-${type} mt-3`;
   statusBox.textContent = message;
 }
 
 startBtn.onclick = async () => {
-  console.log("🚀 [Start Sharing] Clicked");
+  log("🚀 [Start Sharing] Clicked");
 
   try {
     const selected = mode.value;
@@ -62,10 +104,22 @@ startBtn.onclick = async () => {
     recorder.ondataavailable = async (event) => {
       if (event.data && event.data.size > 0) {
         recordedChunks.push(event.data);
-        console.log(`📦 Captured chunk #${recordedChunks.length} (${event.data.size} bytes). Total buffered chunks: ${recordedChunks.length}`);
-
-        // Create a complete, valid WebM Blob containing all headers + data accumulated so far
+        
+        // Assemble current cumulative blob
         const completeBlob = new Blob(recordedChunks, { type: "video/webm" });
+        const currentSizeMB = completeBlob.size / (1024 * 1024);
+
+        log(`📦 Chunk #${recordedChunks.length} captured (${(event.data.size / 1024 / 1024).toFixed(2)} MB). Total: ${currentSizeMB.toFixed(2)} / ${maxBatchSizeMB} MB`);
+
+        // Check if size limit has been reached
+        if (currentSizeMB > maxBatchSizeMB) {
+          logWarn(`⚠️ Cumulative size limit (${maxBatchSizeMB} MB) reached. Stopping recording...`);
+          updateStatus(`Recording limit reached (${maxBatchSizeMB} MB). Auto-stopping...`, "warning");
+          
+          stopBtn.click();
+          return;
+        }
+
         await uploadBatchChunk(completeBlob, partIndex++);
       }
     };
@@ -92,7 +146,7 @@ startBtn.onclick = async () => {
 };
 
 stopBtn.onclick = () => {
-  console.log("🛑 Stopping sharing session...");
+  log("🛑 Stopping sharing session...");
   if (recorder && recorder.state === "recording") {
     recorder.stop();
   }
@@ -105,7 +159,8 @@ stopBtn.onclick = () => {
 };
 
 async function uploadBatchChunk(completeBlob, index) {
-  console.log(`📤 Sending Part #${index} (Cumulative Size: ${(completeBlob.size / 1024 / 1024).toFixed(2)} MB)...`);
+  const currentSizeMB = (completeBlob.size / 1024 / 1024).toFixed(2);
+  log(`📤 Sending Part #${index} (${currentSizeMB} MB / ${maxBatchSizeMB} MB max)...`);
 
   const formData = new FormData();
   formData.append("file", completeBlob, `part_${index}.webm`);
@@ -121,8 +176,8 @@ async function uploadBatchChunk(completeBlob, index) {
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || `HTTP Error ${response.status}`);
 
-    console.log(`✅ Server saved Part #${index}:`, result);
-    updateStatus(`Live recording active: Saved part #${index} (${(completeBlob.size / 1024 / 1024).toFixed(2)} MB)`, "info");
+    logInfo(`✅ Server saved Part #${index}:`, result);
+    updateStatus(`Live recording active: Saved part #${index} (${currentSizeMB} MB / ${maxBatchSizeMB} MB)`, "info");
 
   } catch (error) {
     console.error(`❌ Batch #${index} upload failed:`, error);
