@@ -5,7 +5,10 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.routes.config import router as config_router
 from app.routes.recordings import router as recordings_router
+
+
 from services.gdrive_service import ensure_google_authenticated
 
 # ============================================================
@@ -83,6 +86,7 @@ app.include_router(
     prefix="/api",
 )
 
+app.include_router(config_router, prefix="/api")
 # ============================================================
 # APPLICATION ENTRY POINT
 # ============================================================
